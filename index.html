@@ -1,0 +1,375 @@
+<!doctype html>
+<html lang="tr">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Gardas: Hedef Avı - Basit HTML Oyun</title>
+<style>
+  :root{ --bg:#0f1724; --card:#0b1220; --accent:#ffb86b; --text:#e6eef8; }
+  *{box-sizing:border-box;font-family:Inter, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial;}
+  body{margin:0;min-height:100vh;background:linear-gradient(180deg,var(--bg),#071021);color:var(--text);display:flex;align-items:center;justify-content:center;padding:20px;}
+  .game-wrap{width:900px;max-width:100%;background:linear-gradient(180deg, rgba(255,255,255,0.02), rgba(0,0,0,0.1));border-radius:14px;padding:18px;box-shadow:0 10px 30px rgba(2,6,23,0.6);display:grid;grid-template-columns:1fr 320px;gap:16px;}
+  .board{background:linear-gradient(180deg,#081322, #0b1b2b);border-radius:10px;position:relative;overflow:hidden;min-height:540px;display:flex;align-items:center;justify-content:center;}
+  canvas{display:block;width:100%;height:100%;}
+  .panel{padding:12px;background:linear-gradient(180deg, rgba(255,255,255,0.02), rgba(0,0,0,0.05));border-radius:10px;display:flex;flex-direction:column;gap:12px;min-height:540px;}
+  .title{font-size:18px;font-weight:700;display:flex;align-items:center;gap:8px;}
+  .stat{background:rgba(255,255,255,0.03);padding:10px;border-radius:8px;font-weight:600;}
+  button{background:linear-gradient(90deg,var(--accent),#ff9f6b);border:0;padding:10px 12px;border-radius:10px;font-weight:700;cursor:pointer;}
+  .small{font-size:13px;opacity:0.9;}
+  .controls{display:flex;flex-direction:column;gap:8px;}
+  .footer{margin-top:auto;font-size:13px;opacity:0.8;}
+  .center-txt{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);text-align:center;pointer-events:none}
+  .big{font-size:28px;font-weight:800;color:var(--accent);text-shadow:0 4px 18px rgba(255,184,107,0.12);}
+  .hint{font-size:13px;opacity:0.9}
+  .danger{color:#ff6b6b}
+</style>
+</head>
+<body>
+  <div class="game-wrap">
+    <div class="board" id="board">
+      <canvas id="gameCanvas" width="800" height="540"></canvas>
+      <div class="center-txt" id="centerTxt" style="display:none">
+        <div class="big" id="centerTitle">Hazırız!</div>
+        <div class="hint" id="centerHint">Başlamak için Başlat'a bas</div>
+      </div>
+    </div>
+
+    <div class="panel">
+      <div class="title">Gardas: Hedef Avı <span class="small">— click & dodge</span></div>
+
+      <div class="stat">Skor: <span id="score">0</span></div>
+      <div class="stat">Can: <span id="lives">3</span></div>
+      <div class="stat">Seviye: <span id="level">1</span></div>
+
+      <div class="controls">
+        <button id="startBtn">Başlat</button>
+        <button id="pauseBtn" disabled>Duraklat</button>
+        <button id="resetBtn">Sıfırla</button>
+
+        <div class="small">Açıklama: Hareket eden hedeflere tıkla — büyük hedefler daha çok puan, kırmızı hedefler dokunma/dodge edilmesi gereken bombalar.</div>
+        <div style="height:8px"></div>
+        <label class="small">Hız (oyun zorluğu)</label>
+        <input id="speedRange" type="range" min="0.5" max="2.5" step="0.1" value="1">
+        <div class="small">Seçili hız: <span id="speedVal">1.0</span>x</div>
+      </div>
+
+      <div class="footer">
+        <div class="small">Kontroller: Fare tıklaması ile hedefleri yakala. Boşta sağ üstteki boşluk skor için bonus atar.</div>
+        <div class="small">Kaydet: `oyun.html` olarak kaydet, çift tıkla aç.</div>
+      </div>
+    </div>
+  </div>
+
+<script>
+/*
+  Basit tek dosyalık oyun:
+  - Hareket eden hedefler (dairesel), bazıları "hedef" (yeşil/alt), bazıları "bomba" (kırmızı).
+  - Hedefe tıkla -> puan, bomba'ya tıkla -> can düşer.
+  - Zamanla daha fazla hedef, hız artar; seviye artışı.
+*/
+
+const canvas = document.getElementById('gameCanvas');
+const ctx = canvas.getContext('2d');
+const startBtn = document.getElementById('startBtn');
+const pauseBtn = document.getElementById('pauseBtn');
+const resetBtn = document.getElementById('resetBtn');
+const scoreEl = document.getElementById('score');
+const livesEl = document.getElementById('lives');
+const levelEl = document.getElementById('level');
+const centerTxt = document.getElementById('centerTxt');
+const centerTitle = document.getElementById('centerTitle');
+const centerHint = document.getElementById('centerHint');
+const speedRange = document.getElementById('speedRange');
+const speedVal = document.getElementById('speedVal');
+
+let running = false;
+let paused = false;
+let objects = [];
+let score = 0;
+let lives = 3;
+let level = 1;
+let spawnTimer = 0;
+let spawnInterval = 120; // frame bazlı
+let frame = 0;
+let globalSpeed = 1.0;
+
+// Oyun başlangıcı
+function resetGame(){
+  objects = [];
+  score = 0;
+  lives = 3;
+  level = 1;
+  spawnTimer = 0;
+  spawnInterval = 120;
+  frame = 0;
+  globalSpeed = parseFloat(speedRange.value);
+  updateUI();
+  showCenter("Hazırız!", "Başlat'a bas, gardas!");
+  paused = false;
+  running = false;
+  pauseBtn.disabled = true;
+}
+resetGame();
+
+function startGame(){
+  if(running && !paused) return;
+  running = true;
+  paused = false;
+  pauseBtn.disabled = false;
+  centerTxt.style.display = 'none';
+  loop();
+}
+
+function pauseGame(){
+  if(!running) return;
+  paused = !paused;
+  pauseBtn.textContent = paused ? 'Devam Et' : 'Duraklat';
+  if(!paused) loop();
+  else showCenter("Duraklatıldı", "Tekrar devam etmek için Duraklat'a bas");
+}
+
+function showCenter(title, hint){
+  centerTitle.textContent = title;
+  centerHint.textContent = hint;
+  centerTxt.style.display = 'block';
+}
+
+function updateUI(){
+  scoreEl.textContent = score;
+  livesEl.textContent = lives;
+  levelEl.textContent = level;
+  speedVal.textContent = parseFloat(speedRange.value).toFixed(1);
+}
+
+// Oyun nesnesi üretici
+class Obj {
+  constructor(x,y,r,type){
+    this.x = x;
+    this.y = y;
+    this.r = r;
+    this.type = type; // 'good' veya 'bad'
+    this.vx = (Math.random()*2-1) * (1 + 0.3*level) * globalSpeed;
+    this.vy = (Math.random()*2-1) * (1 + 0.3*level) * globalSpeed;
+    this.angle = 0;
+  }
+  update(){
+    this.x += this.vx;
+    this.y += this.vy;
+    // duvardan dön
+    if(this.x - this.r < 0){ this.x = this.r; this.vx *= -1; }
+    if(this.x + this.r > canvas.width){ this.x = canvas.width - this.r; this.vx *= -1; }
+    if(this.y - this.r < 0){ this.y = this.r; this.vy *= -1; }
+    if(this.y + this.r > canvas.height){ this.y = canvas.height - this.r; this.vy *= -1; }
+    this.angle += 0.05;
+  }
+  draw(ctx){
+    ctx.save();
+    ctx.translate(this.x,this.y);
+    // gölge
+    ctx.beginPath();
+    ctx.arc(6,8,this.r,0,Math.PI*2);
+    ctx.fillStyle = 'rgba(2,6,23,0.35)';
+    ctx.fill();
+    ctx.restore();
+
+    ctx.beginPath();
+    ctx.arc(this.x,this.y,this.r,0,Math.PI*2);
+    if(this.type === 'good'){
+      // gradient
+      let g = ctx.createRadialGradient(this.x - this.r*0.3, this.y - this.r*0.3, this.r*0.1, this.x, this.y, this.r);
+      g.addColorStop(0,'#fff7e6');
+      g.addColorStop(1,'#ffb86b');
+      ctx.fillStyle = g;
+      ctx.fill();
+      ctx.lineWidth = 2;
+      ctx.strokeStyle = 'rgba(255,255,255,0.08)';
+      ctx.stroke();
+    } else {
+      ctx.fillStyle = '#ff6b6b';
+      ctx.fill();
+      ctx.lineWidth = 2;
+      ctx.strokeStyle = 'rgba(0,0,0,0.15)';
+      ctx.stroke();
+      // kırmızı bomba ikonu
+      ctx.fillStyle = 'rgba(0,0,0,0.12)';
+      ctx.beginPath();
+      ctx.arc(this.x, this.y, this.r*0.5, 0, Math.PI*2);
+      ctx.fill();
+    }
+  }
+}
+
+// spawn fonksiyonu
+function spawn(){
+  // seviye arttıkça daha fazla obje ve daha fazla bomba
+  let total = Math.min(8 + Math.floor(level*1.2), 20);
+  // spawn bir obje
+  let x = Math.random()*(canvas.width-60)+30;
+  let y = Math.random()*(canvas.height-60)+30;
+  let r = Math.random()*18 + (level<3?18:12);
+  // % olarak bomba olma
+  let badChance = Math.min(0.08 + level*0.03, 0.4);
+  let type = Math.random() < badChance ? 'bad' : 'good';
+  let obj = new Obj(x,y,r,type);
+  objects.push(obj);
+  // eğer obje sayısı çok düşük ise ekle
+  if(objects.length < Math.min(3+level, total) && Math.random() < 0.6){
+    spawn(); // küçük olasılıkla zincir spawn
+  }
+}
+
+// tıklama işlemi
+canvas.addEventListener('click', function(e){
+  if(!running || paused) return;
+  const rect = canvas.getBoundingClientRect();
+  const mx = (e.clientX - rect.left) * (canvas.width / rect.width);
+  const my = (e.clientY - rect.top) * (canvas.height / rect.height);
+  // en üstteki objeyle etkileşim
+  for(let i = objects.length-1; i >= 0; i--){
+    let o = objects[i];
+    let dx = mx - o.x, dy = my - o.y;
+    if(dx*dx + dy*dy <= o.r*o.r){
+      // yakalandı
+      if(o.type === 'good'){
+        // puan hesapla: r ile ters orantılı (küçük hedef daha puan)
+        let pts = Math.max(5, Math.round(50 / o.r)) + level*2;
+        score += pts;
+        // küçük patlama efekti
+        createPop(o.x,o.y,o.r, o.type);
+      } else {
+        // bomba
+        lives -= 1;
+        createPop(o.x,o.y,o.r, o.type);
+        if(lives <= 0) {
+          gameOver();
+        }
+      }
+      // obje sil
+      objects.splice(i,1);
+      updateUI();
+      return;
+    }
+  }
+
+  // boş yere tıklandıysa küçük puan
+  score += 1;
+  updateUI();
+});
+
+// patlama efektleri (basit)
+let pops = [];
+function createPop(x,y,r,type){
+  pops.push({x,y,r,life:30,type});
+}
+
+// ana döngü
+function loop(){
+  if(!running || paused) return;
+  frame++;
+  globalSpeed = parseFloat(speedRange.value);
+  // spawn kontrolü
+  spawnTimer++;
+  if(spawnTimer >= Math.max(20, spawnInterval - level*6)){
+    spawnTimer = 0;
+    spawn();
+  }
+  // update objeler
+  for(let o of objects) { o.vx *= (1 + 0.0005*level); o.vy *= (1 + 0.0005*level); o.update(); }
+  // update pops
+  for(let i = pops.length-1; i >= 0; i--){
+    pops[i].life--;
+    if(pops[i].life <= 0) pops.splice(i,1);
+  }
+  // seviye atlama: her 500 puanda level
+  let newLevel = Math.floor(score / 500) + 1;
+  if(newLevel > level){
+    level = newLevel;
+    spawnInterval = Math.max(40, spawnInterval - 10);
+    showCenter("Seviye " + level, "Hız arttı, dikkat!");
+    setTimeout(()=> centerTxt.style.display = 'none', 1000);
+  }
+
+  // çizim
+  draw();
+
+  // hafif yavaşlama kontrolü
+  if(!paused) requestAnimationFrame(loop);
+}
+
+// çizim fonksiyonu
+function draw(){
+  // temizle
+  ctx.clearRect(0,0,canvas.width,canvas.height);
+
+  // arka plan ızgara
+  ctx.save();
+  ctx.fillStyle = 'rgba(255,255,255,0.02)';
+  for(let x=0; x<canvas.width; x+=40){
+    ctx.fillRect(x, canvas.height-8, 1, 8);
+  }
+  ctx.restore();
+
+  // objeleri çiz
+  for(let o of objects) o.draw(ctx);
+
+  // pops çiz
+  for(let p of pops){
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, p.r * (1 + (30-p.life)/30*0.8), 0, Math.PI*2);
+    if(p.type === 'good') ctx.fillStyle = 'rgba(255,200,140,'+ (p.life/30) +')';
+    else ctx.fillStyle = 'rgba(255,120,120,'+ (p.life/30) +')';
+    ctx.fill();
+  }
+
+  // UI üst köşe
+  ctx.fillStyle = 'rgba(255,255,255,0.04)';
+  ctx.fillRect(canvas.width-180, 10, 170, 44);
+  ctx.fillStyle = '#fff';
+  ctx.font = '14px Inter, Arial';
+  ctx.fillText('Skor: ' + score, canvas.width-170, 32);
+  ctx.fillText('Can: ' + lives, canvas.width-90, 32);
+}
+
+// oyun bitti
+function gameOver(){
+  running = false;
+  paused = false;
+  centerTxt.style.display = 'block';
+  centerTitle.textContent = 'Oyun Bitti';
+  centerHint.innerHTML = `Skorun: <strong>${score}</strong><br>Tekrar başlamak için Sıfırla'yı kullan.`;
+  pauseBtn.disabled = true;
+  updateUI();
+}
+
+// buton olayları
+startBtn.addEventListener('click', function(){
+  startGame();
+});
+pauseBtn.addEventListener('click', function(){
+  pauseGame();
+});
+resetBtn.addEventListener('click', function(){
+  resetGame();
+});
+
+// hız kontrolü
+speedRange.addEventListener('input', function(){
+  speedVal.textContent = parseFloat(speedRange.value).toFixed(1);
+  globalSpeed = parseFloat(speedRange.value);
+});
+
+// pencere yeniden boyutlandırma: canvas oranını koru
+function resizeCanvas(){
+  // canvas elemanının gerçek piksel boyutlarını koru
+  const rect = canvas.getBoundingClientRect();
+  canvas.width = Math.max(600, Math.floor(rect.width));
+  canvas.height = Math.max(360, Math.floor(rect.height));
+}
+window.addEventListener('resize', resizeCanvas);
+setTimeout(resizeCanvas, 100);
+
+// küçük başlangıç animasyonu
+setTimeout(()=> showCenter("Hedef Avı", "Başlat -> Fareyle hedefleri yakala. Bomba'ya dikkat!"), 300);
+</script>
+</body>
+</html>
